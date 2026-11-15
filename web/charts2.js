@@ -33,6 +33,10 @@ export function surfaceSection(d) {
   const xlo = Math.min(...xs);
   const xhi = Math.max(...xs);
 
+  const cal = d.surface.calendar;
+  const calNote = html("div", { class: "callout reveal", style: "margin-top:0;margin-bottom:18px;grid-column:1/-1" }, grid);
+  html("p", { text: `Across expiries: ${cal.violations === 0 ? "no calendar-spread arbitrage" : cal.violations + " calendar violations"} found. Total variance was compared between each pair of adjacent expiries at ${cal.grid_points} moneyness points${cal.violations === 0 ? "" : " (worst shortfall " + cal.worst_shortfall.toExponential(2) + ")"}. This is a sampled check, not a proof between the sample points.` }, calNote);
+
   d.surface.slices.forEach((s, i) => {
     const { c, chart, tbl, lg } = card(grid, {
       title: `Expiry ${s.expiry < 1 ? Math.round(s.expiry * 12 * 10) / 10 + " months" : "1 year"}`,

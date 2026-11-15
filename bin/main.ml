@@ -337,6 +337,7 @@ let surface_json () =
   let expiries = [ 0.1; 0.25; 0.5; 1.0 ] in
   let strikes = List.init 11 (fun i -> 70. +. (6. *. float_of_int i)) in
   let rng = Random.State.make [| 5 |] in
+  let fitted = ref [] in
   let slices =
     List.map
       (fun t ->
@@ -362,6 +363,7 @@ let surface_json () =
         in
         let points = List.map (fun (_, k, iv) -> { Options.Svi.k; w = iv *. iv *. t }) quotes in
         let fit, rmse = Options.Svi.fit points in
+        fitted := { Options.Surface_check.expiry = t; params = fit } :: !fitted;
         let k_lo = log (70. /. fwd) and k_hi = log (130. /. fwd) in
         let butterfly = Options.Svi.min_butterfly_density fit ~k_lo ~k_hi in
         let curve =
@@ -395,7 +397,25 @@ let surface_json () =
           ])
       expiries
   in
-  J.Object [ "spot", J.Float spot; "rate", J.Float rate; "slices", J.List slices ]
+  let violations =
+    Options.Surface_check.calendar_violations
+      !fitted
+      ~k_lo:(-0.45)
+      ~k_hi:0.45
+      ~n:301
+  in
+  J.Object
+    [ "spot", J.Float spot
+    ; "rate", J.Float rate
+    ; "slices", J.List slices
+    ; ( "calendar"
+      , J.Object
+          [ "expiries", J.Int (List.length !fitted)
+          ; "grid_points", J.Int 301
+          ; "violations", J.Int (List.length violations)
+          ; "worst_shortfall", J.Float (Options.Surface_check.worst_shortfall violations)
+          ] )
+    ]
 ;;
 
 let hedging_json () =

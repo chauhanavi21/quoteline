@@ -87,7 +87,11 @@ PnL.
 SVI is fitted per expiry to implied vols recovered from noisy prices. On
 noiseless data it recovers all five parameters exactly; with 0.5% price noise
 the worst slice has total-variance RMSE of about 6e-5, and every fitted slice
-has positive butterfly density (no static arbitrage over the plotted range).
+has positive butterfly density (no butterfly arbitrage over the plotted range). Across
+expiries, total variance is non-decreasing in maturity at all 301 sampled
+moneyness points for each adjacent pair (`lib/options/surface_check.ml`), so no
+calendar-spread arbitrage was found. The check is tested on a surface built to
+violate it, and fails when its inequality is flipped.
 
 ## Performance, honestly
 
@@ -155,7 +159,8 @@ hand-computed case that does catch it.
 - Synthetic data only; the strategy's edge is a property of my simulator.
 - No latency, fees, queue position, or market impact beyond the book itself.
 - One instrument. The ETF and options modules are not wired into the book.
-- SVI is fitted per slice, with no calendar-spread arbitrage check across expiries.
+- SVI is fitted per slice. The calendar-spread check across expiries is sampled on a
+  301-point grid, so it is a necessary condition, not a proof between sample points.
 
 ## Build and run
 
