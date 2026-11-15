@@ -23,10 +23,13 @@ type config =
   ; n_events : int
   ; start_mid : Price.t
   ; arrival_rate_per_s : float
-  ; cancel_prob : float
+  ; mean_lifetime_events : float
   ; market_prob : float
   ; mean_offset_ticks : float
   ; mean_qty : float
+  ; fundamental_vol : float
+  ; informed_prob : float
+  ; news_lag_events : float
   }
 
 let default_config =
@@ -34,10 +37,13 @@ let default_config =
   ; n_events = 10_000
   ; start_mid = Price.of_ticks 10_000
   ; arrival_rate_per_s = 1_000.
-  ; cancel_prob = 0.25
+  ; mean_lifetime_events = 500.
   ; market_prob = 0.15
   ; mean_offset_ticks = 6.
   ; mean_qty = 10.
+  ; fundamental_vol = 3.
+  ; informed_prob = 0.3
+  ; news_lag_events = 200.
   }
 ;;
 
@@ -51,78 +57,141 @@ type step =
    (0, 1], so it never hits [log 0]. *)
 let exponential rng ~mean = -.mean *. log (1. -. Random.State.float rng 1.)
 
+(* Standard normal via Box-Muller. *)
+let gaussian rng =
+  let u1 = 1. -. Random.State.float rng 1. in
+  let u2 = Random.State.float rng 1. in
+  sqrt (-2. *. log u1) *. cos (2. *. Float.pi *. u2)
+;;
+
 let random_side rng = if Random.State.bool rng then Side.Buy else Side.Sell
 
 let random_qty rng ~mean =
   Qty.of_int (1 + int_of_float (exponential rng ~mean:(mean -. 1.)))
 ;;
 
-(* Reference price for placing new orders: the book midpoint when both sides
-   exist, otherwise the last known mid. *)
-let mid_of book ~fallback =
-  match Book.best_bid book, Book.best_ask book with
-  | Some (b, _), Some (a, _) -> Price.of_ticks ((Price.to_ticks b + Price.to_ticks a) / 2)
-  | _ -> fallback
+let apply book event =
+  match event.action with
+  | Cancel id ->
+    (match Book.cancel book id with
+     | Some (b, _) -> b, []
+     | None -> book, [] (* already filled: harmless no-op *))
+  | Limit { side; price; qty } -> Book.add book { id = event.id; side; price; qty } ~rest:true
+  | Market { side; qty } ->
+    (* A market order is an IOC order priced through the whole book. *)
+    let limit = match side with Side.Buy -> max_int / 2 | Side.Sell -> 0 in
+    Book.add book { id = event.id; side; price = Price.of_ticks limit; qty } ~rest:false
 ;;
 
-let run cfg =
-  let rng = Random.State.make [| cfg.seed |] in
-  let ids = Order_id.Gen.create () in
-  let mean_gap_us = 1_000_000. /. cfg.arrival_rate_per_s in
-  let rec loop n time_us book mid resting acc =
-    if n = 0 then List.rev acc
+module IntMap = Map.Make (Int)
+
+module Flow = struct
+  type t =
+    { cfg : config
+    ; rng : Random.State.t
+    ; ids : Order_id.Gen.t
+    ; mean_gap_us : float
+    ; mutable remaining : int
+    ; mutable step : int
+    ; mutable time_us : int
+    ; mutable anchor : float  (* lagged fundamental that passive orders quote around *)
+    ; mutable fundamental : float
+    ; mutable expiries : Order_id.t list IntMap.t  (* step -> orders that expire then *)
+    }
+
+  let create cfg =
+    { cfg
+    ; rng = Random.State.make [| cfg.seed |]
+    ; ids = Order_id.Gen.create ()
+    ; mean_gap_us = 1_000_000. /. cfg.arrival_rate_per_s
+    ; remaining = cfg.n_events
+    ; step = 0
+    ; time_us = 0
+    ; anchor = float_of_int (Price.to_ticks cfg.start_mid)
+    ; fundamental = float_of_int (Price.to_ticks cfg.start_mid)
+    ; expiries = IntMap.empty
+    }
+  ;;
+
+  let ids t = t.ids
+  let fundamental t = t.fundamental
+
+  let new_limit t ~time_us =
+    let id = Order_id.Gen.next t.ids in
+    let side = random_side t.rng in
+    (* Always at least one tick from the anchor, on the passive side of it. *)
+    let off = 1 + int_of_float (exponential t.rng ~mean:t.cfg.mean_offset_ticks) in
+    let m = int_of_float (Float.round t.anchor) in
+    let price =
+      Price.of_ticks (max 1 (match side with Side.Buy -> m - off | Side.Sell -> m + off))
+    in
+    let qty = random_qty t.rng ~mean:t.cfg.mean_qty in
+    let lifetime = 1 + int_of_float (exponential t.rng ~mean:t.cfg.mean_lifetime_events) in
+    t.expiries
+    <- IntMap.update
+         (t.step + lifetime)
+         (fun l -> Some (id :: Option.value l ~default:[]))
+         t.expiries;
+    { time_us; id; action = Limit { side; price; qty } }
+  ;;
+
+  let new_market t ~book ~time_us =
+    let id = Order_id.Gen.next t.ids in
+    (* Always draw both, so the amount of randomness used per event does not
+       depend on which branch is taken. *)
+    let informed = Random.State.float t.rng 1. < t.cfg.informed_prob in
+    let noise_side = random_side t.rng in
+    (* An informed trader only crosses the spread when it is worth it: buy if
+       the fundamental is above the best ask, sell if it is below the best bid. *)
+    let side =
+      let px = Option.map (fun (p, _) -> float_of_int (Price.to_ticks p)) in
+      match informed, px (Book.best_bid book), px (Book.best_ask book) with
+      | true, _, Some ask when t.fundamental > ask -> Side.Buy
+      | true, Some bid, _ when t.fundamental < bid -> Side.Sell
+      | _ -> noise_side
+    in
+    { time_us; id; action = Market { side; qty = random_qty t.rng ~mean:t.cfg.mean_qty } }
+  ;;
+
+  let next t ~book =
+    if t.remaining = 0 then None
     else (
-      let time_us = time_us + 1 + int_of_float (exponential rng ~mean:mean_gap_us) in
-      let u = Random.State.float rng 1. in
-      let cancel_roll = u < cfg.cancel_prob && resting <> [] in
-      let event, resting =
-        if cancel_roll then (
-          let i = Random.State.int rng (List.length resting) in
-          let victim = List.nth resting i in
-          let resting = List.filteri (fun j _ -> j <> i) resting in
-          { time_us; id = victim; action = Cancel victim }, resting)
-        else if u < cfg.cancel_prob +. cfg.market_prob then (
-          let id = Order_id.Gen.next ids in
-          let side = random_side rng in
-          { time_us; id; action = Market { side; qty = random_qty rng ~mean:cfg.mean_qty } }, resting)
-        else (
-          let id = Order_id.Gen.next ids in
-          let side = random_side rng in
-          (* Always at least one tick from mid, on the passive side of it. *)
-          let off = 1 + int_of_float (exponential rng ~mean:cfg.mean_offset_ticks) in
-          let m = Price.to_ticks mid in
-          let price = Price.of_ticks (match side with Side.Buy -> m - off | Side.Sell -> m + off) in
-          ( { time_us; id; action = Limit { side; price; qty = random_qty rng ~mean:cfg.mean_qty } }
-          , resting ))
+      t.remaining <- t.remaining - 1;
+      t.step <- t.step + 1;
+      let gap_us = 1 + int_of_float (exponential t.rng ~mean:t.mean_gap_us) in
+      t.time_us <- t.time_us + gap_us;
+      let dt = float_of_int gap_us /. 1_000_000. in
+      t.fundamental <- t.fundamental +. (t.cfg.fundamental_vol *. sqrt dt *. gaussian t.rng);
+      t.anchor <- t.anchor +. ((t.fundamental -. t.anchor) /. t.cfg.news_lag_events);
+      let time_us = t.time_us in
+      let u = Random.State.float t.rng 1. in
+      let event =
+        match IntMap.min_binding_opt t.expiries with
+        | Some (due, id :: rest) when due <= t.step ->
+          (* The order may already have been filled; [apply] treats a cancel
+             of a missing order as a no-op. *)
+          t.expiries
+          <- (if rest = [] then IntMap.remove due t.expiries else IntMap.add due rest t.expiries);
+          { time_us; id; action = Cancel id }
+        | _ ->
+          if u < t.cfg.market_prob
+          then new_market t ~book ~time_us
+          else new_limit t ~time_us
       in
-      let book', trades, resting =
-        match event.action with
-        | Cancel id ->
-          (match Book.cancel book id with
-           | Some (b, _) -> b, [], resting
-           | None -> book, [], resting (* already filled: harmless no-op *))
-        | Limit { side; price; qty } ->
-          let b, trades = Book.add book { id = event.id; side; price; qty } ~rest:true in
-          let still_rests = Book.find b event.id <> None in
-          b, trades, if still_rests then event.id :: resting else resting
-        | Market { side; qty } ->
-          (* A market order is an IOC order priced through the whole book. *)
-          let limit = match side with Side.Buy -> max_int / 2 | Side.Sell -> 0 in
-          let b, trades =
-            Book.add book { id = event.id; side; price = Price.of_ticks limit; qty } ~rest:false
-          in
-          b, trades, resting
-      in
-      (* Drop ids that were filled by this event's trades from the cancel pool. *)
-      let resting =
-        match trades with
-        | [] -> resting
-        | _ -> List.filter (fun id -> Book.find book' id <> None) resting
-      in
-      let mid = mid_of book' ~fallback:mid in
-      loop (n - 1) time_us book' mid resting ({ event; trades; book = book' } :: acc))
+      Some event)
+  ;;
+end
+
+let run cfg =
+  let flow = Flow.create cfg in
+  let rec loop book acc =
+    match Flow.next flow ~book with
+    | None -> List.rev acc
+    | Some event ->
+      let book, trades = apply book event in
+      loop book ({ event; trades; book } :: acc)
   in
-  loop cfg.n_events 0 Book.empty cfg.start_mid [] []
+  loop Book.empty []
 ;;
 
 let event_to_csv e =
@@ -168,4 +237,15 @@ let%test "book invariants hold after every simulated event" =
 
 let%test "simulation produces trades" =
   List.exists (fun s -> s.trades <> []) (run { default_config with n_events = 5_000 })
+;;
+
+let%test "stepping the flow by hand matches run" =
+  let cfg = { default_config with n_events = 1_000 } in
+  let flow = Flow.create cfg in
+  let rec go book acc =
+    match Flow.next flow ~book with
+    | None -> List.rev acc
+    | Some e -> go (fst (apply book e)) (event_to_csv e :: acc)
+  in
+  go Book.empty [] = List.map (fun s -> event_to_csv s.event) (run cfg)
 ;;
