@@ -4,7 +4,8 @@
   "type": "module",
   "description": "Browser tests for the Quoteline page. Not needed to view the page.",
   "scripts": {
-    "test": "node browser.mjs"
+    "test": "node browser.mjs",
+    "record": "node record.mjs"
   },
   "devDependencies": {
     "playwright-core": "^1.50.0"

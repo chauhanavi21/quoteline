@@ -9,3 +9,5 @@ research/out/
 
 web/data/
 node_modules/
+docs/*.webm
+web/tests/.rec/

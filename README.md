@@ -11,6 +11,22 @@ Open [`web/index.html`](web/index.html) in a browser (double-click, no server)
 to see the engine's output: a replayable order book and every result below as
 an interactive chart.
 
+![The order book, replayed event by event](docs/order-book.png)
+
+<table>
+  <tr>
+    <td><img src="docs/market-maker.png" alt="Market-maker PnL charts with a tooltip"></td>
+    <td><img src="docs/etf.png" alt="ETF arbitrage and hedging charts"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/hedging.png" alt="Delta-hedging error and profit charts"></td>
+    <td><img src="docs/risk-light.png" alt="Risk distribution in the light theme"></td>
+  </tr>
+</table>
+
+Screenshots come from `web/tests/record.mjs`, which also records a short tour
+video (not committed; it is a few MB).
+
 ## What is in it
 
 | Part | What it does | Where |

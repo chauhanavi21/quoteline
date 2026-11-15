@@ -1,0 +1,6 @@
+# Normalise line endings so Windows and Linux checkouts agree and the
+# "LF will be replaced by CRLF" warnings go away.
+* text=auto eol=lf
+*.png binary
+*.webm binary
+*.bat text eol=crlf
