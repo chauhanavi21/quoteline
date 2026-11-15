@@ -11,6 +11,12 @@ let inv_cdf p =
   0.5 *. (!lo +. !hi)
 ;;
 
+let sample rng =
+  let u1 = 1. -. Random.State.float rng 1. in
+  let u2 = Random.State.float rng 1. in
+  sqrt (-2. *. log u1) *. cos (2. *. Float.pi *. u2)
+;;
+
 let%expect_test "known values" =
   Printf.printf "cdf(0)=%.6f cdf(1.96)=%.6f pdf(0)=%.6f\n" (cdf 0.) (cdf 1.96) (pdf 0.);
   Printf.printf
@@ -38,4 +44,14 @@ let%test "inv_cdf rejects values outside (0, 1)" =
       with
       | Invalid_argument _ -> true)
     [ 0.; 1.; -0.1; 1.5; nan ]
+;;
+
+let%test "sample has mean 0, variance 1 and the right tail" =
+  let rng = Random.State.make [| 3 |] in
+  let n = 200_000 in
+  let xs = Array.init n (fun _ -> sample rng) in
+  let mean = Array.fold_left ( +. ) 0. xs /. float_of_int n in
+  let var = Array.fold_left (fun a x -> a +. ((x -. mean) ** 2.)) 0. xs /. float_of_int n in
+  let tail = float_of_int (Array.fold_left (fun a x -> if x > 1.96 then a + 1 else a) 0 xs) /. float_of_int n in
+  Float.abs mean < 0.01 && Float.abs (var -. 1.) < 0.02 && Float.abs (tail -. 0.025) < 0.002
 ;;
