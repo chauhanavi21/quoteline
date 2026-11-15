@@ -1,0 +1,6 @@
+(library
+ (name quoteline_tests)
+ (libraries core_types book)
+ (inline_tests)
+ (preprocess
+  (pps ppx_expect ppx_inline_test)))
