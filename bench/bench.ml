@@ -63,12 +63,21 @@ let report name cfg =
   rate
 ;;
 
-(* A regression guard that does not depend on how fast the machine is: the
-   ratio of deep-book to shallow-book throughput. The original list-based book
-   scored about 0.05 here (183 K vs 3.6 M events/s); the current one scores
-   about 0.4. Failing below 0.15 catches a return of the O(level depth) cancel
-   without being flaky on a slow or noisy CI runner. *)
-let min_deep_to_shallow_ratio = 0.15
+(* A regression guard that does not depend on how fast the machine is: how much
+   the cost PER EVENT grows when the book is deep (about 20,000 resting orders)
+   compared with shallow (about 170).
+
+   Measured on this machine, four runs each:
+     - current book:                               2.7x, 3.0x, 3.1x, 3.2x
+     - same book with a linear-scan cancel and
+       re-summed level totals (the original bug):  6.4x, 6.8x, 6.9x, 7.2x
+   One earlier session, when the whole machine ran about 3x slower, gave 4.6x for
+   the current book. The limit of 5.0 sits above every healthy value seen and
+   below every defective one.
+
+   (A throughput ratio was tried first and did not separate them: the defective
+   book scored 0.12 against a threshold that healthy runs also approached.) *)
+let max_cost_growth = 5.0
 
 let () =
   let d = Sim.default_config in
@@ -78,12 +87,13 @@ let () =
   let _ = report "deep book (lifetime 20k events)" { d with n_events = n; mean_lifetime_events = 20_000. } in
   let deep = report "very deep book (lifetime 100k)" { d with n_events = n; mean_lifetime_events = 100_000. } in
   let _ = report "heavy matching (60% market orders)" { d with n_events = n; market_prob = 0.6 } in
-  let ratio = deep /. shallow in
+  (* events/s is the inverse of cost per event, so the cost ratio is shallow/deep rate *)
+  let growth = shallow /. deep in
   Printf.printf "
-deep / shallow throughput ratio: %.2f (fails below %.2f)
-" ratio min_deep_to_shallow_ratio;
-  if ratio < min_deep_to_shallow_ratio
+cost per event, deep book vs shallow book: %.1fx (fails above %.1fx)
+" growth max_cost_growth;
+  if growth > max_cost_growth
   then (
-    prerr_endline "FAIL: deep-book throughput collapsed relative to a shallow book";
+    prerr_endline "FAIL: per-event cost grows too steeply with book depth";
     exit 1)
 ;;

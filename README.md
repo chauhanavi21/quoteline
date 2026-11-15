@@ -158,10 +158,17 @@ commit and the same binary, so treat the absolute numbers as a range:
 I could not identify the cause of the slowdown (the CPU reported 2.2 GHz and a
 Balanced power plan in the slow session; I did not capture the clock in the fast
 one). The machine's state changed and the code did not: I re-ran the exact
-commit that produced the fast numbers and it now gives 1.40 to 1.44 M events/s.
-Because absolute numbers are this unstable, the benchmark's pass/fail check uses
-a **ratio** (deep-book over shallow-book throughput), which moved less: 0.40 in
-the fast session, 0.25 to 0.30 in the slow one. It fails below 0.15.
+commit that produced the fast numbers and it gave 1.40 to 1.44 M events/s, and
+later in the day the machine was fast again.
+
+Because absolute numbers move that much, the benchmark's pass/fail check uses a
+machine-independent statistic: how much the cost **per event** grows between a
+shallow book (about 170 resting orders) and a very deep one (about 20,000). The
+current book scores 2.7x to 3.2x over several runs. With the original defect
+reintroduced (linear-scan cancel, re-summed level totals) it scores 5.3x to 7.6x.
+The benchmark fails above 5.0x, and CI runs it. The margin is thinner on the
+defective side than the healthy side, and a first attempt using a throughput
+ratio did not separate the two at all; I only found that by mutating the code.
 
 **The first version of the book collapsed on deep books, and I fixed it.** Each
 price level was a pair of lists, so a cancel scanned and filtered the level and
