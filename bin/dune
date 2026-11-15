@@ -1,0 +1,5 @@
+(executable
+ (name main)
+ (public_name quoteline)
+ (package quoteline)
+ (libraries core_types book sim))
