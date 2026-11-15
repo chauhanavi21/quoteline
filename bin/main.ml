@@ -186,6 +186,78 @@ let gamma_sweep_json ~events =
   J.Object [ "rows", J.List rows ]
 ;;
 
+(* ---- export: order-book replay ---- *)
+
+(* A short window of the real engine for the UI to animate: every event, the
+   trades it caused, and the top of the book afterwards. Prices are in
+   currency units; [window] events starting after a warm-up so the book is
+   already populated. *)
+let replay_json ~seed =
+  let warmup = 3_000 and window = 400 in
+  let flow = Sim.Flow.create { Sim.default_config with seed; n_events = warmup + window } in
+  let depth = 8 in
+  let top book side =
+    let levels = Book.levels book side in
+    let rec take n = function
+      | x :: rest when n > 0 -> x :: take (n - 1) rest
+      | _ -> []
+    in
+    J.List
+      (List.map
+         (fun (p, q) ->
+           J.Object
+             [ "price", J.Float (ticks_to_price (float_of_int (Price.to_ticks p)))
+             ; "qty", J.Int (Qty.to_int q)
+             ])
+         (take depth levels))
+  in
+  let rec go book i acc =
+    match Sim.Flow.next flow ~book with
+    | None -> List.rev acc
+    | Some event ->
+      let book, trades = Sim.apply book event in
+      let acc =
+        if i < warmup
+        then acc
+        else (
+          let kind, side, price, qty =
+            match event.action with
+            | Sim.Limit { side; price; qty } ->
+              ( "limit"
+              , J.String (Side.to_string side)
+              , J.Float (ticks_to_price (float_of_int (Price.to_ticks price)))
+              , J.Int (Qty.to_int qty) )
+            | Sim.Market { side; qty } ->
+              "market", J.String (Side.to_string side), J.Null, J.Int (Qty.to_int qty)
+            | Sim.Cancel _ -> "cancel", J.Null, J.Null, J.Null
+          in
+          J.Object
+            [ "t_us", J.Int event.time_us
+            ; "kind", J.String kind
+            ; "side", side
+            ; "price", price
+            ; "qty", qty
+            ; ( "trades"
+              , J.List
+                  (List.map
+                     (fun (t : Book.trade) ->
+                       J.Object
+                         [ ( "price"
+                           , J.Float (ticks_to_price (float_of_int (Price.to_ticks t.price))) )
+                         ; "qty", J.Int (Qty.to_int t.qty)
+                         ; "taker_side", J.String (Side.to_string t.taker_side)
+                         ])
+                     trades) )
+            ; "bids", top book Side.Buy
+            ; "asks", top book Side.Sell
+            ]
+          :: acc)
+      in
+      go book (i + 1) acc
+  in
+  J.Object [ "seed", J.Int seed; "depth", J.Int depth; "events", J.List (go Book.empty 0 []) ]
+;;
+
 (* ---- export: options ---- *)
 
 let surface_json () =
@@ -458,7 +530,8 @@ let export args =
   emit "surface.json" (surface_json ());
   emit "hedging.json" (hedging_json ());
   emit "etf.json" (etf_json ());
-  emit "risk.json" (risk_json ())
+  emit "risk.json" (risk_json ());
+  emit "replay.json" (replay_json ~seed:a.seed)
 ;;
 
 let () =
