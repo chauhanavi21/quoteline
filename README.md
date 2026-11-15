@@ -96,22 +96,32 @@ has positive butterfly density (no static arbitrage over the plotted range).
 
 | Workload | Resting orders | Events / s | ns / event |
 |---|---|---|---|
-| Default (shallow book) | 171 | 3.58 M | 279 |
-| Deep book | 4,850 | 1.29 M | 772 |
-| Very deep book | 19,937 | **183 K** | **5,466** |
-| Heavy matching (60% market orders) | 12 | 3.96 M | 253 |
+| Default (shallow book) | 171 | 4.39 M | 228 |
+| Deep book | 4,850 | 2.44 M | 410 |
+| Very deep book | 19,937 | 1.77 M | 565 |
+| Heavy matching (60% market orders) | 12 | 12.7 M | 79 |
 
-**Throughput collapses as the book deepens, and the cause is known.** On the
-deep book a limit order costs about 640 ns and a market order about 1,000 ns,
-but a cancel costs about 4,900 ns. Cancels are 30% of events and take 78% of the
-time. `Book.cancel` finds the order by scanning its price level's list and then
-filters that list, so a cancel costs time proportional to the orders at that
-price. Fixing it means an id-indexed structure per level; I have not done that.
+**The first version of the book collapsed on deep books, and I fixed it.** Each
+price level was a pair of lists, so a cancel scanned and filtered the level and
+every depth query re-summed it. Timing each event type showed a cancel cost
+about 4,900 ns on a 20,000-order book against 640 ns for a limit order: cancels
+were 30% of events and 78% of the time. Throughput on that book was 183 K events/s.
 
-Note that the book is a persistent (immutable) structure. That is what makes
-replay, forking and property testing simple, and it costs allocation on every
-operation. These figures are single-threaded and say nothing about network or
-disk latency.
+Each level is now a map keyed by arrival sequence number with a cached total, so
+cancel, partial fill and depth reads are O(log n) in the level. The same book
+now runs at 1.77 M events/s (9.7x), and the cost per event grows from 228 ns to
+565 ns across a 100x deeper book instead of from 279 ns to 5,466 ns.
+
+The change was checked three ways: the existing unit and property tests, the
+independent Python book (identical trades on three seeds), and a byte-for-byte
+comparison of the old and new engine over 73,547 trades and every sampled book
+depth across five workloads. A direct test pins the subtle rule that a partially
+filled order keeps its place in the queue; moving it to the back makes that test
+fail.
+
+The book is a persistent (immutable) structure. That makes replay, forking and
+property testing simple, and it costs allocation on every operation. These
+figures are single-threaded and say nothing about network or disk latency.
 
 ## Testing
 
@@ -135,6 +145,8 @@ hand-computed case that does catch it.
   followed the news. Per-order lifetimes fixed it.
 - My first test of that effect compared totals, which fall as fills fall, and
   used a regime where the effect cannot appear. It now compares per lot.
+- The first order book cancelled in time proportional to the depth of its price
+  level, which collapsed throughput on deep books (183 K events/s). Fixed, above.
 - The page first said the maker "lost money" from a single unlucky seed. The
   24-seed run says otherwise, so the page now shows both.
 
@@ -143,7 +155,6 @@ hand-computed case that does catch it.
 - Synthetic data only; the strategy's edge is a property of my simulator.
 - No latency, fees, queue position, or market impact beyond the book itself.
 - One instrument. The ETF and options modules are not wired into the book.
-- Cancel cost grows with level depth (above).
 - SVI is fitted per slice, with no calendar-spread arbitrage check across expiries.
 
 ## Build and run

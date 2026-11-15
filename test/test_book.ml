@@ -169,3 +169,49 @@ let%test "random operation sequences preserve invariants and conserve volume" =
   done;
   !ok
 ;;
+
+(* After a partial fill the maker keeps its place in the queue: a later order at
+   the same price must not jump ahead of it. Order 1 is partly filled by order 3,
+   then order 4 arrives; order 1 must still fill before order 2. *)
+let%expect_test "a partially filled maker keeps time priority over later orders" =
+  let b = Book.empty in
+  let b = apply b (order 1 Sell 100 10) ~rest:true in
+  let b = apply b (order 2 Sell 100 10) ~rest:true in
+  let b = apply b (order 3 Buy 100 4) ~rest:true in
+  let b = apply b (order 4 Sell 100 10) ~rest:true in
+  let b = apply b (order 5 Buy 100 20) ~rest:true in
+  ignore b;
+  [%expect {|
+    taker=3 maker=1 BUY 4@100
+    taker=5 maker=1 BUY 6@100
+    taker=5 maker=2 BUY 10@100
+    taker=5 maker=4 BUY 4@100
+    |}]
+;;
+
+(* Cancelling must keep the level's cached total and the id index consistent. *)
+let%test "cancels keep cached totals and the index consistent" =
+  let rng = Random.State.make [| 77 |] in
+  let gen = Order_id.Gen.create () in
+  let book = ref Book.empty and live = ref [] and ok = ref true in
+  for _ = 1 to 20_000 do
+    if Random.State.int rng 3 = 0 && !live <> [] then (
+      let i = Random.State.int rng (List.length !live) in
+      let id = List.nth !live i in
+      live := List.filteri (fun j _ -> j <> i) !live;
+      match Book.cancel !book id with
+      | Some (b, o) ->
+        if Order_id.compare o.id id <> 0 then ok := false;
+        book := b
+      | None -> ())
+    else (
+      let side = if Random.State.bool rng then Side.Buy else Side.Sell in
+      let price = 98 + Random.State.int rng 5 in
+      let id = Order_id.Gen.next gen in
+      let b, trades = Book.add !book { id; side; price = px price; qty = q (1 + Random.State.int rng 9) } ~rest:true in
+      book := b;
+      if trades = [] then live := id :: !live);
+    (match Book.check_invariants !book with Ok () -> () | Error _ -> ok := false)
+  done;
+  !ok
+;;

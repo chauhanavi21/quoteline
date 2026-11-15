@@ -17,48 +17,57 @@ type trade =
 
 module PMap = Map.Make (Price)
 module IMap = Map.Make (Order_id)
+module SMap = Map.Make (Int)
 
-(* A price level is a persistent FIFO queue: [front] is oldest-first, [back]
-   is newest-first. Amortised O(1) push and pop. *)
+(* A price level holds its orders in a map keyed by arrival sequence number, so
+   the oldest order is the minimum key. That makes every operation O(log n) in
+   the level's size: pop the oldest, cancel by id, and keep a partially filled
+   order at the front (it retains its original sequence number). The level also
+   caches its total quantity, so reading depth never walks the orders. *)
 module Level = struct
   type t =
-    { front : order list
-    ; back : order list
+    { orders : order SMap.t
+    ; total : int
     }
 
-  let empty = { front = []; back = [] }
-  let is_empty t = t.front = [] && t.back = []
-  let push_back t o = { t with back = o :: t.back }
-  let push_front t o = { t with front = o :: t.front }
+  let empty = { orders = SMap.empty; total = 0 }
+  let is_empty t = SMap.is_empty t.orders
 
-  let pop_front t =
-    match t.front with
-    | o :: front -> Some (o, { t with front })
-    | [] ->
-      (match List.rev t.back with
-       | [] -> None
-       | o :: front -> Some (o, { front; back = [] }))
+  let add t ~seq (o : order) =
+    { orders = SMap.add seq o t.orders; total = t.total + Qty.to_int o.qty }
   ;;
 
-  let to_list t = t.front @ List.rev t.back
+  let oldest t = SMap.min_binding_opt t.orders
 
-  let total_qty t =
-    List.fold_left (fun acc (o : order) -> Qty.add acc o.qty) Qty.zero (to_list t)
+  (* Replace the order at [seq] (used for a partial fill: same place in the queue). *)
+  let replace t ~seq (o : order) =
+    match SMap.find_opt seq t.orders with
+    | None -> invalid_arg "Book.Level.replace: unknown sequence number"
+    | Some old ->
+      { orders = SMap.add seq o t.orders
+      ; total = t.total - Qty.to_int old.qty + Qty.to_int o.qty
+      }
   ;;
 
-  let remove t id =
-    let keep o = not (Order_id.equal o.id id) in
-    { front = List.filter keep t.front; back = List.filter keep t.back }
+  let remove t ~seq =
+    match SMap.find_opt seq t.orders with
+    | None -> t
+    | Some o -> { orders = SMap.remove seq t.orders; total = t.total - Qty.to_int o.qty }
   ;;
+
+  let find t ~seq = SMap.find_opt seq t.orders
+  let total_qty t = Qty.of_int t.total
+  let to_list t = List.map snd (SMap.bindings t.orders)
 end
 
 type t =
   { bids : Level.t PMap.t
   ; asks : Level.t PMap.t
-  ; index : (Side.t * Price.t) IMap.t
+  ; index : (Side.t * Price.t * int) IMap.t  (* side, price, arrival sequence number *)
+  ; next_seq : int
   }
 
-let empty = { bids = PMap.empty; asks = PMap.empty; index = IMap.empty }
+let empty = { bids = PMap.empty; asks = PMap.empty; index = IMap.empty; next_seq = 0 }
 
 let side_map t = function
   | Side.Buy -> t.bids
@@ -102,9 +111,9 @@ let add t (order : order) ~rest =
     else (
       match best_binding t opp with
       | Some (px, level) when crosses order.side ~limit:order.price ~best:px ->
-        (match Level.pop_front level with
+        (match Level.oldest level with
          | None -> assert false (* empty levels are never stored *)
-         | Some (maker, level') ->
+         | Some (seq, maker) ->
            let fill = Qty.min remaining maker.qty in
            let trade =
              { taker = order.id
@@ -115,15 +124,13 @@ let add t (order : order) ~rest =
              }
            in
            let maker_left = Qty.sub maker.qty fill in
-           let level'' =
-             if Qty.is_zero maker_left then level'
-             else Level.push_front level' { maker with qty = maker_left }
+           let level' =
+             if Qty.is_zero maker_left
+             then Level.remove level ~seq
+             else Level.replace level ~seq { maker with qty = maker_left }
            in
            let m = side_map t opp in
-           let m =
-             if Level.is_empty level'' then PMap.remove px m
-             else PMap.add px level'' m
-           in
+           let m = if Level.is_empty level' then PMap.remove px m else PMap.add px level' m in
            let t = with_side_map t opp m in
            let t =
              if Qty.is_zero maker_left then { t with index = IMap.remove maker.id t.index }
@@ -134,10 +141,15 @@ let add t (order : order) ~rest =
   in
   let t, remaining, trades = loop t order.qty [] in
   let t =
-    if rest && not (Qty.is_zero remaining) then (
+    if rest && not (Qty.is_zero remaining)
+    then (
       let resting = { order with qty = remaining } in
-      let t = update_level t order.side order.price (fun l -> Level.push_back l resting) in
-      { t with index = IMap.add order.id (order.side, order.price) t.index })
+      let seq = t.next_seq in
+      let t = update_level t order.side order.price (fun l -> Level.add l ~seq resting) in
+      { t with
+        index = IMap.add order.id (order.side, order.price, seq) t.index
+      ; next_seq = seq + 1
+      })
     else t
   in
   t, List.rev trades
@@ -146,19 +158,21 @@ let add t (order : order) ~rest =
 let find t id =
   match IMap.find_opt id t.index with
   | None -> None
-  | Some (side, price) ->
+  | Some (side, price, seq) ->
     (match PMap.find_opt price (side_map t side) with
      | None -> None
-     | Some level ->
-       List.find_opt (fun o -> Order_id.equal o.id id) (Level.to_list level))
+     | Some level -> Level.find level ~seq)
 ;;
 
 let cancel t id =
-  match find t id with
+  match IMap.find_opt id t.index with
   | None -> None
-  | Some order ->
-    let t = update_level t order.side order.price (fun l -> Level.remove l id) in
-    Some ({ t with index = IMap.remove id t.index }, order)
+  | Some (side, price, seq) ->
+    (match find t id with
+     | None -> None
+     | Some order ->
+       let t = update_level t side price (fun l -> Level.remove l ~seq) in
+       Some ({ t with index = IMap.remove id t.index }, order))
 ;;
 
 let best side t =
@@ -205,13 +219,28 @@ let check_invariants t =
               else if o.side <> side then Error "order on wrong side"
               else
                 match IMap.find_opt o.id t.index with
-                | Some (s, p) when s = side && Price.equal p px -> Ok ()
+                | Some (s, p, _) when s = side && Price.equal p px -> Ok ()
                 | _ -> Error "index disagrees with level")
             (Ok ()) (Level.to_list level))
       (side_map t side) (Ok ())
   in
+  let check_totals side =
+    PMap.fold
+      (fun _ level acc ->
+        let* () = acc in
+        let recomputed =
+          List.fold_left (fun a (o : order) -> a + Qty.to_int o.qty) 0 (Level.to_list level)
+        in
+        if recomputed <> Qty.to_int (Level.total_qty level)
+        then Error "cached level total disagrees with its orders"
+        else Ok ())
+      (side_map t side)
+      (Ok ())
+  in
   let* () = check_side Side.Buy in
   let* () = check_side Side.Sell in
+  let* () = check_totals Side.Buy in
+  let* () = check_totals Side.Sell in
   let level_orders =
     List.fold_left
       (fun n s ->
