@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions: read-all
+
+jobs:
+  ocaml:
+    name: Build, test and cross-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up OCaml
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: "5.5"
+
+      - name: Install dependencies
+        run: opam install . --deps-only
+
+      - name: Build
+        run: opam exec -- dune build
+
+      - name: Test
+        run: opam exec -- dune runtest
+
+      # The independent Python book must reproduce the engine's trades exactly.
+      - name: Cross-check the engine against the Python reference book
+        run: |
+          opam exec -- dune exec quoteline -- run-sim --seed 42 --events 20000 --out out
+          python3 -I research/reference_book.py out/events.csv out/trades.csv
+
+      - name: Cross-check option pricing against Monte Carlo
+        run: python3 -I research/mc_options.py
+
+      # Same seed twice must give byte-identical exports.
+      - name: Exports are deterministic
+        run: |
+          opam exec -- dune exec quoteline -- export --seed 42 --events 4000 --out a
+          opam exec -- dune exec quoteline -- export --seed 42 --events 4000 --out b
+          diff -r a b
+
+      # Throughput must not collapse on a deep book (it did once; see README).
+      - name: Benchmark (fails if deep-book throughput collapses)
+        run: opam exec -- dune exec bench/bench.exe
+
+  web:
+    name: Browser tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+
+      - name: Install test dependencies
+        working-directory: web/tests
+        run: npm ci
+
+      # The committed web/data.js and web/app.bundle.js must match their sources.
+      - name: Bundle is up to date
+        working-directory: web
+        run: |
+          node build-bundle.mjs
+          git diff --exit-code app.bundle.js
+
+      - name: Run browser tests
+        working-directory: web/tests
+        run: npm test

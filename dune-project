@@ -8,8 +8,7 @@
  (name quoteline)
  (synopsis "Matching engine, market-making lab, ETF arbitrage and options risk in OCaml")
  (depends
-  (ocaml (>= 4.14))
+  (ocaml (>= 5.2))
   dune
   ppx_expect
-  ppx_inline_test
-  qcheck-core))
+  ppx_inline_test))

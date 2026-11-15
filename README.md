@@ -143,15 +143,25 @@ violate it, and fails when its inequality is flipped.
 
 ## Performance, honestly
 
-`dune exec bench/bench.exe` on an Intel Core Ultra 7 265H, 31 GB RAM (median of
-7 runs, event generation excluded):
+`dune exec bench/bench.exe` on an Intel Core Ultra 7 265H, 31 GB RAM, Windows 11
+(median of 7 runs, event generation excluded). **Absolute throughput on this
+laptop varied by about 3x between two sessions on the same day**, with the same
+commit and the same binary, so treat the absolute numbers as a range:
 
-| Workload | Resting orders | Events / s | ns / event |
+| Workload | Resting orders | Events / s (fast session) | Events / s (slow session) |
 |---|---|---|---|
-| Default (shallow book) | 171 | 4.39 M | 228 |
-| Deep book | 4,850 | 2.44 M | 410 |
-| Very deep book | 19,937 | 1.77 M | 565 |
-| Heavy matching (60% market orders) | 12 | 12.7 M | 79 |
+| Default (shallow book) | 171 | 4.39 M | 1.49 M |
+| Deep book | 4,850 | 2.44 M | 0.49 M |
+| Very deep book | 19,937 | 1.77 M | 0.30 to 0.43 M |
+| Heavy matching (60% market orders) | 12 | 12.7 M | 2.93 M |
+
+I could not identify the cause of the slowdown (the CPU reported 2.2 GHz and a
+Balanced power plan in the slow session; I did not capture the clock in the fast
+one). The machine's state changed and the code did not: I re-ran the exact
+commit that produced the fast numbers and it now gives 1.40 to 1.44 M events/s.
+Because absolute numbers are this unstable, the benchmark's pass/fail check uses
+a **ratio** (deep-book over shallow-book throughput), which moved less: 0.40 in
+the fast session, 0.25 to 0.30 in the slow one. It fails below 0.15.
 
 **The first version of the book collapsed on deep books, and I fixed it.** Each
 price level was a pair of lists, so a cancel scanned and filtered the level and
@@ -161,8 +171,9 @@ were 30% of events and 78% of the time. Throughput on that book was 183 K events
 
 Each level is now a map keyed by arrival sequence number with a cached total, so
 cancel, partial fill and depth reads are O(log n) in the level. The same book
-now runs at 1.77 M events/s (9.7x), and the cost per event grows from 228 ns to
-565 ns across a 100x deeper book instead of from 279 ns to 5,466 ns.
+now runs about 9.7x faster (1.77 M vs 183 K events/s, both measured in the fast
+session), and the cost per event grows from 228 ns to 565 ns across a 100x deeper
+book instead of from 279 ns to 5,466 ns.
 
 The change was checked three ways: the existing unit and property tests, the
 independent Python book (identical trades on three seeds), and a byte-for-byte

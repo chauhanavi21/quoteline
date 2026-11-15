@@ -56,19 +56,34 @@ let report name cfg =
   let timings = List.init reps (fun _ -> fst (time (fun () -> run_once evs))) in
   let trades, resting = run_once evs in
   let med = median timings in
+  let rate = float_of_int n /. med in
   Printf.printf "%-34s %7d events  %6d trades  %6d resting  median %.3fs  %9.0f events/s  %4.0f ns/event
 %!"
-    name n trades resting med (float_of_int n /. med) (med /. float_of_int n *. 1e9)
+    name n trades resting med rate (med /. float_of_int n *. 1e9);
+  rate
 ;;
+
+(* A regression guard that does not depend on how fast the machine is: the
+   ratio of deep-book to shallow-book throughput. The original list-based book
+   scored about 0.05 here (183 K vs 3.6 M events/s); the current one scores
+   about 0.4. Failing below 0.15 catches a return of the O(level depth) cancel
+   without being flaky on a slow or noisy CI runner. *)
+let min_deep_to_shallow_ratio = 0.15
 
 let () =
   let d = Sim.default_config in
   let n = 200_000 in
   print_endline "Matching-engine throughput (7 repetitions, median; event generation excluded)";
-  report "default (shallow book, ~170 resting)" { d with n_events = n };
-  (* Long order lifetimes and a high arrival rate leave a deep book. *)
-  report "deep book (lifetime 20k events)" { d with n_events = n; mean_lifetime_events = 20_000. };
-  report "very deep book (lifetime 100k)" { d with n_events = n; mean_lifetime_events = 100_000. };
-  (* Mostly marketable orders: lots of matching, little resting. *)
-  report "heavy matching (60% market orders)" { d with n_events = n; market_prob = 0.6 }
+  let shallow = report "default (shallow book, ~170 resting)" { d with n_events = n } in
+  let _ = report "deep book (lifetime 20k events)" { d with n_events = n; mean_lifetime_events = 20_000. } in
+  let deep = report "very deep book (lifetime 100k)" { d with n_events = n; mean_lifetime_events = 100_000. } in
+  let _ = report "heavy matching (60% market orders)" { d with n_events = n; market_prob = 0.6 } in
+  let ratio = deep /. shallow in
+  Printf.printf "
+deep / shallow throughput ratio: %.2f (fails below %.2f)
+" ratio min_deep_to_shallow_ratio;
+  if ratio < min_deep_to_shallow_ratio
+  then (
+    prerr_endline "FAIL: deep-book throughput collapsed relative to a shallow book";
+    exit 1)
 ;;
