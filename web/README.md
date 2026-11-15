@@ -24,3 +24,21 @@ opened by double-click needs one classic script.
 - Respects `prefers-reduced-motion`: no scroll animation, no auto-playing replay.
 - Dark and light themes from the same tokens; the toggle is remembered.
 - Every chart has a table view and keyboard-driven tooltips.
+
+## Tests
+
+`web/tests/browser.mjs` opens the page from disk in a real browser and checks 31
+things: every section renders in dark and light, nothing is stuck hidden, no
+console errors, the replay plays, pauses and scrubs, the replayed book is never
+crossed, tooltips show the value of the data point under the pointer (checked
+against the data, by mouse and by keyboard), the table view and legend toggle
+work, reduced motion really removes the animation, and nothing scrolls sideways
+at phone width.
+
+```
+cd web/tests && npm install && npm test
+```
+
+It needs Chrome, Edge or Chromium (set `CHROME_PATH` to choose one). The suite
+was mutation-checked: corrupting the replay data and deleting the
+reduced-motion CSS each make it fail.
