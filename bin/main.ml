@@ -258,6 +258,69 @@ let replay_json ~seed =
   J.Object [ "seed", J.Int seed; "depth", J.Int depth; "events", J.List (go Book.empty 0 []) ]
 ;;
 
+(* ---- export: the same backtest across many seeds ---- *)
+
+(* One path says little, so the page also shows the spread across independent
+   seeds: per-seed totals plus a bootstrap interval for the mean, computed here
+   so the page shows engine output and not a hand-copied number. *)
+let seeds_json ~events =
+  let n = 24 in
+  let runs =
+    List.init n (fun i ->
+      let seed = i + 1 in
+      let r = Mm.Backtest.run (mm_config ~seed ~events ~informed:0.3 ~vol:10. ~gamma:0.02) in
+      seed, r)
+  in
+  let get f = Array.of_list (List.map (fun (_, (r : Mm.Backtest.result)) -> ticks_to_price (f r)) runs) in
+  let comps =
+    [ "spread_capture", get (fun r -> r.attribution.spread_capture)
+    ; "adverse_selection", get (fun r -> r.attribution.adverse_selection)
+    ; "inventory", get (fun r -> r.attribution.inventory)
+    ; "total_pnl", get (fun r -> r.total_pnl)
+    ]
+  in
+  let mean xs = Array.fold_left ( +. ) 0. xs /. float_of_int (Array.length xs) in
+  (* Percentile bootstrap of the mean, with a fixed seed so the file is reproducible. *)
+  let bootstrap xs =
+    let rng = Random.State.make [| 1 |] in
+    let b = 10_000 in
+    let k = Array.length xs in
+    let means =
+      Array.init b (fun _ ->
+        let s = ref 0. in
+        for _ = 1 to k do
+          s := !s +. xs.(Random.State.int rng k)
+        done;
+        !s /. float_of_int k)
+    in
+    Array.sort compare means;
+    means.(b * 25 / 1000), means.((b * 975 / 1000) - 1)
+  in
+  J.Object
+    [ "n_seeds", J.Int n
+    ; "events", J.Int events
+    ; "unit", J.String "currency units"
+    ; ( "per_seed_total"
+      , J.List
+          (List.map
+             (fun (seed, (r : Mm.Backtest.result)) ->
+               J.Object [ "seed", J.Int seed; "total_pnl", J.Float (ticks_to_price r.total_pnl) ])
+             runs) )
+    ; ( "components"
+      , J.List
+          (List.map
+             (fun (name, xs) ->
+               let lo, hi = bootstrap xs in
+               J.Object
+                 [ "name", J.String name
+                 ; "mean", J.Float (mean xs)
+                 ; "ci_lo", J.Float lo
+                 ; "ci_hi", J.Float hi
+                 ])
+             comps) )
+    ]
+;;
+
 (* ---- export: options ---- *)
 
 let surface_json () =
@@ -531,7 +594,8 @@ let export args =
   emit "hedging.json" (hedging_json ());
   emit "etf.json" (etf_json ());
   emit "risk.json" (risk_json ());
-  emit "replay.json" (replay_json ~seed:a.seed)
+  emit "replay.json" (replay_json ~seed:a.seed);
+  emit "seeds.json" (seeds_json ~events:a.events)
 ;;
 
 let () =
