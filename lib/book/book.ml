@@ -170,6 +170,13 @@ let best side t =
 let best_bid t = best Side.Buy t
 let best_ask t = best Side.Sell t
 
+let mid t =
+  match best_bid t, best_ask t with
+  | Some (b, _), Some (a, _) ->
+    Some (float_of_int (Price.to_ticks b + Price.to_ticks a) /. 2.)
+  | _ -> None
+;;
+
 let total_qty t side =
   PMap.fold (fun _ l acc -> Qty.add acc (Level.total_qty l)) (side_map t side) Qty.zero
 ;;

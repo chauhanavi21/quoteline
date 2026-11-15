@@ -40,6 +40,10 @@ val find : t -> Order_id.t -> order option
 val best_bid : t -> (Price.t * Qty.t) option
 val best_ask : t -> (Price.t * Qty.t) option
 
+(** Midpoint of best bid and best ask, in ticks (may end in .5). [None] if
+    either side is empty. *)
+val mid : t -> float option
+
 (** Total resting quantity on one side. *)
 val total_qty : t -> Side.t -> Qty.t
 
