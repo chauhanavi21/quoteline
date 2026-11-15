@@ -2,4 +2,4 @@
  (name main)
  (public_name quoteline)
  (package quoteline)
- (libraries core_types book sim))
+ (libraries core_types book sim mm options risk etf export))
