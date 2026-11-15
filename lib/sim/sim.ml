@@ -153,7 +153,7 @@ module Flow = struct
     { time_us; id; action = Market { side; qty = random_qty t.rng ~mean:t.cfg.mean_qty } }
   ;;
 
-  let next t ~book =
+  let next ?fundamental t ~book =
     if t.remaining = 0 then None
     else (
       t.remaining <- t.remaining - 1;
@@ -161,7 +161,12 @@ module Flow = struct
       let gap_us = 1 + int_of_float (exponential t.rng ~mean:t.mean_gap_us) in
       t.time_us <- t.time_us + gap_us;
       let dt = float_of_int gap_us /. 1_000_000. in
-      t.fundamental <- t.fundamental +. (t.cfg.fundamental_vol *. sqrt dt *. gaussian t.rng);
+      (* Always draw the Gaussian, so the random stream is the same whether or
+         not the caller supplies the fundamental. *)
+      let shock = gaussian t.rng in
+      (match fundamental with
+       | Some f -> t.fundamental <- f
+       | None -> t.fundamental <- t.fundamental +. (t.cfg.fundamental_vol *. sqrt dt *. shock));
       t.anchor <- t.anchor +. ((t.fundamental -. t.anchor) /. t.cfg.news_lag_events);
       let time_us = t.time_us in
       let u = Random.State.float t.rng 1. in

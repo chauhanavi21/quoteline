@@ -83,8 +83,13 @@ module Flow : sig
   (** Id generator shared with the caller, so ids never collide. *)
   val ids : t -> Order_id.Gen.t
 
-  (** Next event given the current book, or [None] after [n_events]. *)
-  val next : t -> book:Book.t -> event option
+  (** Next event given the current book, or [None] after [n_events].
+
+      Normally the hidden fundamental follows its own random walk. Pass
+      [~fundamental] (in ticks) to set it from outside instead, for example to
+      drive it from the NAV of a basket. The random stream consumed is the
+      same either way, so omitting it reproduces earlier runs exactly. *)
+  val next : ?fundamental:float -> t -> book:Book.t -> event option
 
   (** The hidden fundamental price, in ticks. For diagnostics and tests
       only: a strategy that reads this is cheating. *)

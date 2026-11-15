@@ -47,6 +47,18 @@ type result =
   ; volume : int  (** total quantity we traded *)
   }
 
+(** The exact PnL decomposition used by {!run}, for any list of fills against a
+    series of market mids. [mids.(i)] is the market mid after event [i];
+    [start_mid] is the mid before event 0; [markout] is the horizon in events.
+    Exposed so other simulations (for example the ETF market) reuse one
+    implementation instead of copying it. *)
+val attribute
+  :  start_mid:float
+  -> mids:float array
+  -> markout:int
+  -> fill list
+  -> attribution
+
 (** @raise Invalid_argument if [sim.n_events <= 0], [requote_every <= 0] or
     [markout_events < 0]. *)
 val run : config -> result

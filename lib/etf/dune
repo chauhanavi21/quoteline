@@ -1,6 +1,6 @@
 (library
  (name etf)
- (libraries options)
+ (libraries core_types book sim mm options)
  (inline_tests)
  (preprocess
   (pps ppx_expect ppx_inline_test)))
