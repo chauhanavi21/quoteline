@@ -42,8 +42,14 @@ let write_file path contents =
 
 let run_sim args =
   let a = parse { seed = 42; events = 10_000; out = "out" } args in
+  let cfg = { Sim.default_config with seed = a.seed; n_events = a.events } in
+  (* Validate before creating any directory or file. *)
+  (try ignore (Sim.Flow.create cfg)
+   with Invalid_argument m ->
+     prerr_endline ("error: " ^ m);
+     exit 2);
   ensure_dir a.out;
-  let steps = Sim.run { Sim.default_config with seed = a.seed; n_events = a.events } in
+  let steps = Sim.run cfg in
   let lines ls = String.concat "" (List.map (fun l -> l ^ "\n") ls) in
   write_file
     (Filename.concat a.out "events.csv")

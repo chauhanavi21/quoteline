@@ -85,6 +85,24 @@ let apply book event =
 
 module IntMap = Map.Make (Int)
 
+let validate cfg =
+  let bad msg = invalid_arg ("Sim.config: " ^ msg) in
+  if cfg.n_events < 0 then bad "n_events must be >= 0";
+  if not (Float.is_finite cfg.arrival_rate_per_s && cfg.arrival_rate_per_s > 0.)
+  then bad "arrival_rate_per_s must be finite and > 0";
+  if not (cfg.market_prob >= 0. && cfg.market_prob <= 1.) then bad "market_prob must be in [0, 1]";
+  if not (cfg.informed_prob >= 0. && cfg.informed_prob <= 1.) then bad "informed_prob must be in [0, 1]";
+  if not (Float.is_finite cfg.mean_offset_ticks && cfg.mean_offset_ticks > 0.)
+  then bad "mean_offset_ticks must be finite and > 0";
+  if not (Float.is_finite cfg.mean_qty && cfg.mean_qty >= 1.) then bad "mean_qty must be finite and >= 1";
+  if not (Float.is_finite cfg.mean_lifetime_events && cfg.mean_lifetime_events > 0.)
+  then bad "mean_lifetime_events must be finite and > 0";
+  if not (Float.is_finite cfg.fundamental_vol && cfg.fundamental_vol >= 0.)
+  then bad "fundamental_vol must be finite and >= 0";
+  if not (Float.is_finite cfg.news_lag_events && cfg.news_lag_events >= 1.)
+  then bad "news_lag_events must be finite and >= 1"
+;;
+
 module Flow = struct
   type t =
     { cfg : config
@@ -100,6 +118,7 @@ module Flow = struct
     }
 
   let create cfg =
+    validate cfg;
     { cfg
     ; rng = Random.State.make [| cfg.seed |]
     ; ids = Order_id.Gen.create ()
@@ -253,4 +272,29 @@ let%test "stepping the flow by hand matches run" =
     | Some e -> go (fst (apply book e)) (event_to_csv e :: acc)
   in
   go Book.empty [] = List.map (fun s -> event_to_csv s.event) (run cfg)
+;;
+
+let%test "invalid configurations are rejected, valid ones are not" =
+  let bad c = try ignore (Flow.create c); false with Invalid_argument _ -> true in
+  bad { default_config with n_events = -1 }
+  && bad { default_config with arrival_rate_per_s = -1000. }
+  && bad { default_config with arrival_rate_per_s = 0. }
+  && bad { default_config with arrival_rate_per_s = Float.nan }
+  && bad { default_config with market_prob = 1.5 }
+  && bad { default_config with informed_prob = -0.1 }
+  && bad { default_config with mean_offset_ticks = 0. }
+  && bad { default_config with mean_qty = 0.5 }
+  && bad { default_config with mean_lifetime_events = Float.infinity }
+  && bad { default_config with news_lag_events = 0. }
+  && (not (bad default_config))
+  && not (bad { default_config with n_events = 0 })
+;;
+
+let%test "timestamps are positive and strictly increasing" =
+  let steps = run { default_config with n_events = 2_000 } in
+  let rec ok prev = function
+    | [] -> true
+    | (s : step) :: rest -> s.event.time_us > prev && ok s.event.time_us rest
+  in
+  ok 0 steps
 ;;

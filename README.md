@@ -217,6 +217,14 @@ hand-computed case that does catch it.
   used a regime where the effect cannot appear. It now compares per lot.
 - The first order book cancelled in time proportional to the depth of its price
   level, which collapsed throughput on deep books (183 K events/s). Fixed, above.
+- An outside review of an early snapshot found three real defects that I had not
+  fixed: `--events -1` ran forever, a negative arrival rate produced negative
+  timestamps, and `Qty.add max_int 1` wrapped to a negative number, breaking the
+  type's promise that a quantity is never negative. Simulator configuration is now
+  validated at the library boundary (and before the CLI creates any file), and
+  `Qty.add` raises on overflow. Each fix has a test that fails when the fix is
+  removed. Reported numbers are unchanged: no earlier run used such values, and
+  seed-42 output is byte-identical.
 - The page first said the maker "lost money" from a single unlucky seed. The
   24-seed run says otherwise, so the page now shows both.
 

@@ -10,6 +10,7 @@ val of_int : int -> t
 val to_int : t -> int
 val compare : t -> t -> int
 val equal : t -> t -> bool
+(** @raise Invalid_argument if the sum would overflow. *)
 val add : t -> t -> t
 val is_zero : t -> bool
 val min : t -> t -> t

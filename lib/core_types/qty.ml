@@ -12,7 +12,13 @@ let of_int n =
 let to_int t = t
 let compare = Int.compare
 let equal = Int.equal
-let add = ( + )
+(* Checked: a sum that would overflow would wrap negative and break the type's
+   promise, so it raises instead. *)
+let add a b =
+  let s = a + b in
+  if s < a then invalid_arg "Qty.add: overflow" else s
+;;
+
 let is_zero t = t = 0
 let min = Int.min
 
@@ -32,3 +38,10 @@ let%expect_test "sub and min" =
 let%expect_test "negative quantity is rejected" =
   (try ignore (of_int (-1)) with Invalid_argument m -> print_endline m);
   [%expect {| Qty.of_int: negative (-1) |}]
+
+let%expect_test "add is checked against overflow" =
+  print_endline (to_string (add (of_int 2) (of_int 3)));
+  (try ignore (add (of_int max_int) (of_int 1)) with Invalid_argument m -> print_endline m);
+  [%expect {|
+    5
+    Qty.add: overflow |}]
