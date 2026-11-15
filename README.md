@@ -19,7 +19,7 @@ an interactive chart.
 | Simulator | Seeded event stream with a hidden fundamental price, informed traders and per-order lifetimes. Same seed, same bytes | `lib/sim` |
 | Market maker | Avellaneda-Stoikov quoting, post-only, inventory limits; PnL split into spread / adverse selection / inventory | `lib/mm` |
 | Options | Black-Scholes and Greeks, implied vol, SVI surface fit with a butterfly-arbitrage check, delta hedging | `lib/options` |
-| ETF | NAV and creation/redemption arbitrage signal with all-in costs; least-squares partial-basket hedge | `lib/etf` |
+| ETF | NAV and creation/redemption arbitrage signal with all-in costs; least-squares partial-basket hedge; a three-stock market where the ETF has a real order book and a maker can quote around the basket | `lib/etf` |
 | Risk | Historical and normal VaR and expected shortfall | `lib/risk` |
 | Research (Python) | Independent re-implementations used as cross-checks | `research/` |
 | Web view | Plain HTML/CSS/JS, no framework | `web/` |
@@ -72,6 +72,38 @@ and the order-flow parameters are my own assumptions, and there is no latency,
 fee or queue-position model. With the default news volatility, informed flow has
 almost no effect on the maker; the sweep on the page uses a larger value, where
 more informed flow measurably worsens adverse selection per lot.
+
+### Quoting an ETF around its basket: part protection, part foresight
+
+`lib/etf/etf_market.ml` ties the basket to the matching engine. Three stocks
+follow correlated random walks, the ETF's value is their NAV, and the ETF trades
+on its own order book. Two makers quote it, identical except for the reference
+price: the book's own mid, or a blend toward the basket NAV (computed from the
+observable stock prices, never from the hidden fundamental). Same seeds, so both
+face the same world. Mean of 16 seeds, 20,000 events:
+
+| Weight on NAV | Total | Spread | Adverse selection | Inventory |
+|---|---|---|---|---|
+| 0.00 (own mid) | +2.73 | +7.55 | -3.47 | -1.35 |
+| 0.50 | +19.04 | +6.06 | -1.56 | +14.54 |
+| 1.00 (NAV only) | +27.81 | +3.65 | +0.50 | +23.66 |
+
+The total gain is real in the model, but it is two different things, and I
+separated them by varying how slowly the ETF book follows the basket:
+
+- The **adverse-selection** part improves most when the book follows the basket
+  *closely* (+8.99 at a 5-event lag, +1.24 at 1,500).
+- The **inventory** part grows as the book lags (+7.35 to +18.11). That is a
+  forecasting edge: the basket leads the book, so a maker watching it holds the
+  side the price is moving toward. The book follows the basket with a delay *by
+  construction* here, so that edge is an assumption of the simulation, not a
+  finding about real markets.
+
+My first version of this comparison showed gains of over a million ticks. The
+stock volatility was in the wrong units, so the ETF book could not follow the
+NAV (tracking error 500 ticks instead of 4.7). The mutation check that
+reintroduces that bug initially passed every test; I then added a bound on
+tracking error that fails on it.
 
 ### Delta hedging behaves as theory says
 
@@ -158,7 +190,8 @@ hand-computed case that does catch it.
 
 - Synthetic data only; the strategy's edge is a property of my simulator.
 - No latency, fees, queue position, or market impact beyond the book itself.
-- One instrument. The ETF and options modules are not wired into the book.
+- The ETF is wired to an order book; the options and hedging modules are not (they
+  run on simulated stock paths, not on a book). Still one tradable book per market.
 - SVI is fitted per slice. The calendar-spread check across expiries is sampled on a
   301-point grid, so it is a necessary condition, not a proof between sample points.
 

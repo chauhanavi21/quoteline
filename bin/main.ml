@@ -545,6 +545,59 @@ let etf_json () =
     ]
 ;;
 
+(* ---- export: ETF market (the basket wired to a real order book) ---- *)
+
+(* Two makers quote the same ETF book: one around the book's own mid, one
+   blended toward the basket NAV. Same seeds, same world. The sweep over the
+   book's lag shows how much of the NAV maker's gain is protection from
+   adverse selection and how much is a forecasting edge that exists only
+   because the book follows the basket with a delay. *)
+let etf_market_json () =
+  let d = Etf.Etf_market.default_config in
+  let seeds = List.init 16 (fun i -> i + 1) in
+  let run ~w ~lag seed =
+    Etf.Etf_market.run
+      { d with nav_weight = w; sim = { d.sim with seed; news_lag_events = lag } }
+  in
+  let mean f rs = List.fold_left (fun a r -> a +. f r) 0. rs /. float_of_int (List.length rs) in
+  let tp = ticks_to_price in
+  let by_weight =
+    List.map
+      (fun w ->
+        let rs = List.map (run ~w ~lag:d.sim.news_lag_events) seeds in
+        J.Object
+          [ "nav_weight", J.Float w
+          ; "total_pnl", J.Float (tp (mean (fun (r : Etf.Etf_market.result) -> r.total_pnl) rs))
+          ; "spread_capture", J.Float (tp (mean (fun (r : Etf.Etf_market.result) -> r.attribution.spread_capture) rs))
+          ; "adverse_selection", J.Float (tp (mean (fun (r : Etf.Etf_market.result) -> r.attribution.adverse_selection) rs))
+          ; "inventory", J.Float (tp (mean (fun (r : Etf.Etf_market.result) -> r.attribution.inventory) rs))
+          ; "max_abs_inventory", J.Float (mean (fun (r : Etf.Etf_market.result) -> float_of_int r.max_abs_inventory) rs)
+          ])
+      [ 0.; 0.25; 0.5; 0.75; 1. ]
+  in
+  let by_lag =
+    List.map
+      (fun lag ->
+        let a = List.map (run ~w:0.5 ~lag) seeds and b = List.map (run ~w:0. ~lag) seeds in
+        let gain f = mean f a -. mean f b in
+        J.Object
+          [ "lag_events", J.Float lag
+          ; "total_gain", J.Float (tp (gain (fun (r : Etf.Etf_market.result) -> r.total_pnl)))
+          ; "adverse_gain", J.Float (tp (gain (fun (r : Etf.Etf_market.result) -> r.attribution.adverse_selection)))
+          ; "inventory_gain", J.Float (tp (gain (fun (r : Etf.Etf_market.result) -> r.attribution.inventory)))
+          ])
+      [ 5.; 20.; 100.; 400.; 1500. ]
+  in
+  J.Object
+    [ "seeds", J.Int (List.length seeds)
+    ; "events", J.Int d.sim.n_events
+    ; "unit", J.String "currency units"
+    ; "nav_tracking_error_ticks", J.Float (mean (fun (r : Etf.Etf_market.result) -> r.nav_tracking_error) (List.map (run ~w:0. ~lag:d.sim.news_lag_events) seeds))
+    ; "by_nav_weight", J.List by_weight
+    ; "by_book_lag", J.List by_lag
+    ]
+;;
+
 (* ---- export: risk ---- *)
 
 let risk_json () =
@@ -615,7 +668,8 @@ let export args =
   emit "etf.json" (etf_json ());
   emit "risk.json" (risk_json ());
   emit "replay.json" (replay_json ~seed:a.seed);
-  emit "seeds.json" (seeds_json ~events:a.events)
+  emit "seeds.json" (seeds_json ~events:a.events);
+  emit "etf_market.json" (etf_market_json ())
 ;;
 
 let () =

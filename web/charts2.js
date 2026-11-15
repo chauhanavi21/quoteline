@@ -280,6 +280,108 @@ export function etfSection(d) {
   }
 }
 
+// ---- ETF market: the basket wired to a real order book -------------------
+
+export function etfMarketSection(d) {
+  const grid = document.getElementById("etf-grid");
+  const m = d.etf_market;
+
+  // 1. PnL decomposition by how much weight the maker puts on the basket NAV
+  {
+    const rows = m.by_nav_weight;
+    const { c, chart, tbl, lg } = card(grid, {
+      title: "Quoting around the basket, not the ETF's own price",
+      sub: `ETF market maker, mean of ${m.seeds} seeds. Weight 0 quotes around the book's mid; weight 1 quotes around the basket NAV`,
+      delay: 2,
+    });
+    const parts = [
+      { key: "spread_capture", name: "Spread capture", color: "var(--c1)" },
+      { key: "adverse_selection", name: "Adverse selection", color: "var(--c2)" },
+      { key: "inventory", name: "Inventory", color: "var(--c3)" },
+    ];
+    const vals = rows.flatMap((r) => parts.map((p) => r[p.key]));
+    const ticks = niceTicks(Math.min(0, ...vals), Math.max(0, ...vals), 5);
+    const f = frame(chart, {
+      width: 560, height: 300, margin: { top: 14, right: 24, bottom: 52, left: 48 },
+      x: { domain: [0, rows.length], ticks: [] },
+      y: { domain: [ticks[0], ticks[ticks.length - 1]], ticks, format: axisFormat(ticks) },
+      yZero: true, yTitle: "currency units",
+    });
+    const slot = f.pw / rows.length;
+    const bw = 14;
+    const gap = 2;
+    rows.forEach((r, i) => {
+      const cx = slot * i + slot / 2;
+      parts.forEach((p, k) => {
+        const x = cx - (bw * 3 + gap * 2) / 2 + k * (bw + gap);
+        roundedBar(f.layer, { x, y0: f.sy(0), y1: f.sy(r[p.key]), w: bw, fill: p.color, r: 3 });
+      });
+      const l = el("text", { class: "tick", x: cx, y: f.ph + 22, "text-anchor": "middle" }, f.g);
+      l.textContent = r.nav_weight.toFixed(2);
+      const hit = el("rect", { x: cx - slot / 2, y: 0, width: slot, height: f.ph, fill: "transparent", tabindex: 0 }, f.g);
+      el("title", {}, hit).textContent = `NAV weight ${r.nav_weight}: total ${money(r.total_pnl)} = spread ${money(r.spread_capture)} + adverse ${money(r.adverse_selection)} + inventory ${money(r.inventory)}`;
+    });
+    const lab = el("text", { class: "axis-title", x: f.pw / 2, y: f.ph + 42, "text-anchor": "middle" }, f.g);
+    lab.textContent = "weight on the basket NAV";
+    tableView(tbl, ["NAV weight", "Total", "Spread", "Adverse", "Inventory", "Max |inv|"], rows.map((r) => [r.nav_weight.toFixed(2), money(r.total_pnl), money(r.spread_capture), money(r.adverse_selection), money(r.inventory), r.max_abs_inventory.toFixed(1)]));
+    lg.replaceChildren();
+    for (const p of parts) {
+      const b = html("button", { type: "button", "aria-pressed": "true", tabindex: -1, style: "cursor:default" }, lg);
+      html("i", { class: "sw", style: `background:${p.color}` }, b);
+      html("span", { text: p.name }, b);
+    }
+    onVisible(c, () => trigger(c));
+  }
+
+  // 2. How much of the gain survives when the book follows the basket closely?
+  {
+    const rows = m.by_book_lag;
+    const { c, chart, tbl, lg } = card(grid, {
+      title: "How much of the gain is protection, and how much is foresight?",
+      sub: "Gain of a half-NAV maker over the own-mid maker, split into its parts, as the ETF book follows the basket more slowly",
+      delay: 3,
+    });
+    const series = [
+      { name: "Adverse selection", color: "var(--c2)", key: "adverse_gain" },
+      { name: "Inventory", color: "var(--c3)", key: "inventory_gain" },
+    ];
+    const lx = rows.map((r) => Math.log10(r.lag_events));
+    const vals = rows.flatMap((r) => series.map((s2) => r[s2.key]));
+    const ticks = niceTicks(0, Math.max(...vals), 5);
+    const f = frame(chart, {
+      width: 560, height: 300, margin: { top: 14, right: 110, bottom: 52, left: 52 },
+      x: { domain: [Math.min(...lx), Math.max(...lx)], ticks: lx, format: (v) => String(Math.round(10 ** v)) },
+      y: { domain: [0, ticks[ticks.length - 1]], ticks, format: axisFormat(ticks) },
+      xTitle: "events for the ETF book to catch up with the basket (log scale)", yTitle: "gain, currency units",
+    });
+    series.forEach((s2) => {
+      const pts = rows.map((r) => [Math.log10(r.lag_events), r[s2.key]]);
+      line(f.layer, pts, f.sx, f.sy, s2.color);
+      pts.forEach((p, i) => {
+        const dot = el("circle", { cx: f.sx(p[0]), cy: f.sy(p[1]), r: 4, fill: s2.color, class: "dot-ring fade-in" }, f.layer);
+        el("title", {}, dot).textContent = `lag ${rows[i].lag_events}: ${s2.name} gain ${money(p[1])}`;
+      });
+      const last = pts[pts.length - 1];
+      endLabel(f.layer, f.sx(last[0]), f.sy(last[1]), s2.name.split(" ")[0]);
+    });
+    tableView(tbl, ["Lag (events)", "Total gain", "Adverse gain", "Inventory gain"], rows.map((r) => [r.lag_events, money(r.total_gain), money(r.adverse_gain), money(r.inventory_gain)]));
+    lg.replaceChildren();
+    for (const s2 of series) {
+      const b = html("button", { type: "button", "aria-pressed": "true", tabindex: -1, style: "cursor:default" }, lg);
+      html("i", { style: `background:${s2.color}` }, b);
+      html("span", { text: s2.name }, b);
+    }
+    onVisible(c, () => trigger(c));
+  }
+
+  const first = m.by_book_lag[0];
+  const last = m.by_book_lag[m.by_book_lag.length - 1];
+  const note = html("div", { class: "callout reveal", style: "grid-column:1/-1;margin-top:0" }, grid);
+  const body = html("p", {}, note);
+  html("strong", { text: "Read this carefully. ", style: "color:var(--ink)" }, body);
+  html("span", { text: `The gain splits into two measured parts. The adverse-selection part, the mid-price move over the next 100 events against each fill, improves most when the ETF book follows the basket closely (${money(first.adverse_gain)} at a ${first.lag_events}-event lag, against ${money(last.adverse_gain)} at ${last.lag_events}). The rest, the inventory part, grows as the book lags (${money(first.inventory_gain)} to ${money(last.inventory_gain)}) and is a forecasting edge: the basket leads the book, so a maker that watches it holds the side the price is moving toward. In this simulation the book follows the basket with a delay by construction, so that edge is an assumption of the model, not a finding about real markets.` }, body);
+}
+
 // ---- risk ---------------------------------------------------------------
 
 export function riskSection(d) {

@@ -25,6 +25,7 @@ const names = [
   "risk",
   "replay",
   "seeds",
+  "etf_market",
 ];
 
 const bundle = {};

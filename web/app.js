@@ -3,7 +3,7 @@
 
 import { initBook } from "./book.js";
 import { heroStats, makerSection } from "./charts.js";
-import { surfaceSection, hedgeSection, etfSection, riskSection, stackSection } from "./charts2.js";
+import { surfaceSection, hedgeSection, etfSection, etfMarketSection, riskSection, stackSection } from "./charts2.js";
 
 const data = window.QUOTELINE;
 
@@ -36,6 +36,7 @@ if (!data) {
     ["surface", () => surfaceSection(data)],
     ["hedging", () => hedgeSection(data)],
     ["etf", () => etfSection(data)],
+    ["etf market", () => etfMarketSection(data)],
     ["risk", () => riskSection(data)],
     ["stack", () => stackSection(data)],
   ];
