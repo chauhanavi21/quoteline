@@ -141,7 +141,7 @@ export function makerSection(d) {
         width: 560, height: 300, margin: { top: 14, right: 118, bottom: 38, left: 52 },
         x: { domain: [0, 1], ticks: [0, 0.2, 0.4, 0.6, 0.8, 1], format: (v) => `${Math.round(v * 100)}%` },
         y: { domain: [ticks[0], ticks[ticks.length - 1]], ticks, format: axisFormat(ticks) },
-        xTitle: "share of market orders that are informed", yZero: true,
+        xTitle: "share of market orders that are informed", yTitle: "currency per lot traded", yZero: true,
       });
       vis.forEach((s) => {
         line(f.layer, s.points, f.sx, f.sy, s.color);
@@ -191,9 +191,57 @@ export function makerSection(d) {
     onVisible(c, () => trigger(c));
   }
 
+  // 5. The same strategy across 24 independent seeds: is the edge real?
+  {
+    const sd = d.seeds;
+    const total = sd.components.find((x) => x.name === "total_pnl");
+    const rows = [...sd.per_seed_total].sort((a, b) => b.total_pnl - a.total_pnl);
+    const { c, chart, tbl, lg } = card(grid, {
+      title: `One strategy, ${sd.n_seeds} independent markets`,
+      sub: `Total PnL per seed, sorted. Mean ${money(total.mean)}, 95% bootstrap interval ${money(total.ci_lo)} to ${money(total.ci_hi)}`,
+      delay: 4,
+    });
+    const vals = rows.map((r) => r.total_pnl);
+    const ticks = niceTicks(Math.min(0, ...vals), Math.max(0, ...vals), 5);
+    const f = frame(chart, {
+      width: 560, height: 300, margin: { top: 16, right: 24, bottom: 40, left: 48 },
+      x: { domain: [0, rows.length], ticks: [] }, y: { domain: [ticks[0], ticks[ticks.length - 1]], ticks, format: axisFormat(ticks) },
+      yZero: true, xTitle: "seeds, best to worst",
+    });
+    const slot = f.pw / rows.length;
+    rows.forEach((r, i) => {
+      const cx = slot * i + slot / 2;
+      roundedBar(f.layer, { x: cx - Math.min(10, slot / 2 - 1), y0: f.sy(0), y1: f.sy(r.total_pnl), w: Math.min(20, slot - 2), fill: r.total_pnl >= 0 ? "var(--c1)" : "var(--c2)" });
+      const hit = el("rect", { x: cx - slot / 2, y: 0, width: slot, height: f.ph, fill: "transparent", tabindex: 0 }, f.g);
+      el("title", {}, hit).textContent = `seed ${r.seed}: ${money(r.total_pnl)}`;
+    });
+    // the mean and its interval, as a band across the plot
+    const band = el("rect", { x: 0, y: f.sy(total.ci_hi), width: f.pw, height: Math.max(2, f.sy(total.ci_lo) - f.sy(total.ci_hi)), fill: "var(--ink)", "fill-opacity": 0.1, class: "fade-in" }, f.layer);
+    el("title", {}, band).textContent = `95% interval for the mean: ${money(total.ci_lo)} to ${money(total.ci_hi)}`;
+    el("line", { x1: 0, x2: f.pw, y1: f.sy(total.mean), y2: f.sy(total.mean), stroke: "var(--ink)", "stroke-width": 1.5, "stroke-dasharray": "5 5", class: "fade-in" }, f.layer);
+    const ml = el("text", { class: "end-label fade-in", x: f.pw - 4, y: f.sy(total.mean) - 8, "text-anchor": "end" }, f.layer);
+    ml.textContent = `mean ${money(total.mean)}`;
+    tableView(tbl, ["Seed", "Total PnL"], rows.map((r) => [r.seed, money(r.total_pnl)]));
+    lg.replaceChildren();
+    for (const [name, color] of [["Made money", "var(--c1)"], ["Lost money", "var(--c2)"]]) {
+      const b = html("button", { type: "button", "aria-pressed": "true", tabindex: -1, style: "cursor:default" }, lg);
+      html("i", { class: "sw", style: `background:${color}` }, b);
+      html("span", { text: name }, b);
+    }
+    const wins = rows.filter((r) => r.total_pnl > 0).length;
+    html("span", { class: "sub", style: "margin-left:auto", text: `${wins} of ${rows.length} seeds profitable` }, lg);
+    onVisible(c, () => trigger(c));
+  }
+
   const note = document.getElementById("maker-note");
-  const total = s.total_pnl;
-  html("span", { text: total < 0 ? "Honest result:" : "Result:" }, note).style.cssText = "font-weight:650;color:var(--ink)";
-  html("span", { text: ` in this run the maker ${total < 0 ? "lost" : "made"} ${Math.abs(total).toFixed(2)}. Spread capture of ${s.spread_capture.toFixed(2)} was eaten by adverse selection (${s.adverse_selection.toFixed(2)}) and inventory moves (${s.inventory.toFixed(2)}). There is no latency, fees or queue model, so treat this as a mechanism demo, not a profit claim.` }, note);
+  const sd = d.seeds;
+  const tot = sd.components.find((x) => x.name === "total_pnl");
+  const comp = (n) => sd.components.find((x) => x.name === n);
+  const wins = sd.per_seed_total.filter((r) => r.total_pnl > 0).length;
+  const body = html("p", {}, note);
+  const lead = html("strong", { text: "What the evidence supports. " }, body);
+  lead.style.color = "var(--ink)";
+  const excludesZero = tot.ci_lo > 0 || tot.ci_hi < 0;
+  html("span", { text: `The single run above ended at ${money(s.total_pnl)}, but across ${sd.n_seeds} independent markets the mean is ${money(tot.mean)} (95% interval ${money(tot.ci_lo)} to ${money(tot.ci_hi)}), and ${wins} of ${sd.n_seeds} seeds made money. ${excludesZero ? "The interval excludes zero, so in this simulator the average is positive, though small next to the spread captured." : "The interval includes zero, so the average is not distinguishable from nothing."} On average spread capture is ${money(comp("spread_capture").mean)}, adverse selection ${money(comp("adverse_selection").mean)} and inventory ${money(comp("inventory").mean)}. There is no latency, fees or queue-position model, and the informed traders and their news are my own assumptions, so read this as a demonstration of the mechanism, not evidence of a tradable edge.` }, body);
   onVisible(note, () => note.classList.add("in"));
 }
