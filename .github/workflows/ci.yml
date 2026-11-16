@@ -57,6 +57,15 @@ jobs:
           node web/build-data.mjs fresh fresh.js
           diff web/data.js fresh.js
 
+      - name: Keep the fresh export for inspection when the check fails
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fresh-export
+          path: |
+            fresh/
+            fresh.js
+
       # Throughput must not collapse on a deep book (it did once; see README).
       - name: Benchmark (fails if deep-book throughput collapses)
         run: opam exec -- dune exec bench/bench.exe
