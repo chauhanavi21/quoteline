@@ -46,6 +46,18 @@ a negative size cannot be represented.
 
 ## Results, and how each was checked
 
+### Results reproduce across operating systems
+
+The same seed gives the same output on Windows (where this was developed) and on
+GitHub's Linux runners. The datasets built from integer arithmetic and the seeded
+generator (order book, simulator, market maker, ETF market, order-book replay) are
+**bit for bit identical** on both. The ones that use `exp`, `log` and iterative
+fits differ only in the last digits, because the system maths library differs:
+worst relative difference 2e-7 for the SVI fit and below 1e-13 for hedging and
+risk. CI enforces exactly this split on every push (`web/check-data.mjs`). I found
+it by accident: my first version of that check demanded byte equality and failed on
+the Linux runner.
+
 ### The matching engine agrees with an independent implementation
 
 `research/reference_book.py` is a deliberately naive order book (plain lists,
