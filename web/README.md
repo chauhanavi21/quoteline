@@ -42,3 +42,13 @@ cd web/tests && npm install && npm test
 It needs Chrome, Edge or Chromium (set `CHROME_PATH` to choose one). The suite
 was mutation-checked: corrupting the replay data and deleting the
 reduced-motion CSS each make it fail.
+
+## Is the page showing what the engine produces?
+
+CI regenerates the data and compares it with the committed `web/data.js`
+(`web/check-data.mjs`). Datasets built only from integer arithmetic and the seeded
+generator (order book, simulator, market maker, ETF market, replay) must be
+**identical**; they are bit for bit the same on Windows and Linux. Datasets that use
+`exp`, `log` and iterative fits (options, hedging, risk) are compared to a relative
+tolerance of 1e-5, because the system maths library differs in the last bits: the
+measured worst differences were 2e-7 for the SVI fit and below 1e-13 elsewhere.

@@ -51,20 +51,14 @@ jobs:
 
       # The page reads web/data.js. If the engine changes and that file is not
       # regenerated, the page would keep showing stale results; fail instead.
+      # Integer-based datasets must match exactly; float-based ones (options,
+      # hedging, risk) to a tolerance, since the maths library differs in the
+      # last bits between Windows and Linux. See web/check-data.mjs.
       - name: Committed page data matches a fresh export
         run: |
           opam exec -- dune exec quoteline -- export --seed 42 --events 20000 --out fresh
           node web/build-data.mjs fresh fresh.js
-          diff web/data.js fresh.js
-
-      - name: Keep the fresh export for inspection when the check fails
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: fresh-export
-          path: |
-            fresh/
-            fresh.js
+          node web/check-data.mjs web/data.js fresh.js
 
       # Throughput must not collapse on a deep book (it did once; see README).
       - name: Benchmark (fails if deep-book throughput collapses)
